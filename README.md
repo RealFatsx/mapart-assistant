@@ -4,6 +4,16 @@ A fully automated, client-side Fabric mod designed to build massive MapArts in M
 
 ---
 
+## 🎉 Community & Resources
+
+**Shoutout to the Mapartists of 2b2t!**
+If you're building on the oldest anarchy server in Minecraft, come join the official Mapartists of 2b2t Discord community here: [https://discord.com/invite/r7Tuerq](https://discord.com/invite/r7Tuerq)
+
+**Recommended MapArt Platform Schematic:**
+Need a flat, solid foundation to build your art on? You can download my recommended platform schematic here: [Download Schematic](https://discordapp.com/channels/349201680023289867/1418153264351805553)
+
+---
+
 ## ✨ Features
 * **Fully Automated Building**: Reads your Litematica schematic and places blocks automatically.
 * **Smart Chest Assignment**: Tell the bot which chests contain which blocks, and it will fetch them automatically when it runs out!
@@ -93,18 +103,3 @@ Below are the exact Lambda Printer settings that work flawlessly for me. *(Note:
 
 **Build > Reach**
 ![Lambda Settings 3](assets/lambda_settings_3.png)
-* Fabric API
-* Litematica
-* Baritone
-
-
-
----
-
-## 🎉 Community & Resources
-
-**Shoutout to the Mapartists of 2b2t!**
-If you're building on the oldest anarchy server in Minecraft, come join the official Mapartists of 2b2t Discord community here: [https://discord.com/invite/r7Tuerq](https://discord.com/invite/r7Tuerq)
-
-**Recommended MapArt Platform Schematic:**
-Need a flat, solid foundation to build your art on? You can download my recommended platform schematic here: [Download Schematic](https://discordapp.com/channels/349201680023289867/1418153264351805553)
