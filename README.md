@@ -81,7 +81,7 @@ To use this mod, you will need the following installed:
 
 ## 🖨️ Recommended Lambda Printer Settings
 
-To actually place the blocks, this mod relies on a client-side Printer. I highly recommend using the **Lambda Client**. While you can absolutely choose to use a different printer, you will likely need to tweak its settings to get it working smoothly. 
+To actually place the blocks, this mod relies on a client-side Printer. We highly recommend using the **Lambda Client**. While you can absolutely choose to use a different printer, you will likely need to tweak its settings to get it working smoothly. 
 
 Below are the exact Lambda Printer settings that work flawlessly for me. *(Note: These are just the settings that work best for my connection and playstyle. Other settings might work better for other players or for different servers depending on your ping/TPS!)*
 
@@ -98,3 +98,13 @@ Below are the exact Lambda Printer settings that work flawlessly for me. *(Note:
 * Baritone
 
 
+
+---
+
+## 🎉 Community & Resources
+
+**Shoutout to the Mapartists of 2b2t!**
+If you're building on the oldest anarchy server in Minecraft, come join the official Mapartists of 2b2t Discord community here: [https://discord.com/invite/r7Tuerq](https://discord.com/invite/r7Tuerq)
+
+**Recommended MapArt Platform Schematic:**
+Need a flat, solid foundation to build your art on? You can download my recommended platform schematic here: [Download Schematic](https://discordapp.com/channels/349201680023289867/1418153264351805553)
