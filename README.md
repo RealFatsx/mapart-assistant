@@ -81,7 +81,7 @@ To use this mod, you will need the following installed:
 
 ## 🖨️ Recommended Lambda Printer Settings
 
-To actually place the blocks, this mod relies on a client-side Printer. We highly recommend using the **Lambda Client**. While you can absolutely choose to use a different printer, you will likely need to tweak its settings to get it working smoothly. 
+To actually place the blocks, this mod relies on a client-side Printer. I highly recommend using the **Lambda Client**. While you can absolutely choose to use a different printer, you will likely need to tweak its settings to get it working smoothly. 
 
 Below are the exact Lambda Printer settings that work flawlessly for me. *(Note: These are just the settings that work best for my connection and playstyle. Other settings might work better for other players or for different servers depending on your ping/TPS!)*
 
