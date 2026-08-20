@@ -68,9 +68,33 @@ When the bot is building and runs out of White Carpet, it will instantly stop, p
 
 ---
 
-## ⚙️ Requirements
-* Fabric Mod Loader
+## ⚙️ Dependencies
+
+To use this mod, you will need the following installed:
+* [Fabric Loader](https://fabricmc.net/)
+* [Fabric API](https://modrinth.com/mod/fabric-api)
+* [Litematica](https://www.curseforge.com/minecraft/mc-mods/litematica)
+* [Baritone](https://github.com/cabaletta/baritone)
+* [Lambda Client](https://github.com/lambda-client/lambda) (Highly recommended for the Printer module)
+
+---
+
+## 🖨️ Recommended Lambda Printer Settings
+
+To actually place the blocks, this mod relies on a client-side Printer. We highly recommend using the **Lambda Client**. While you can absolutely choose to use a different printer, you will likely need to tweak its settings to get it working smoothly. 
+
+Below are the exact Lambda Printer settings that work flawlessly for me. *(Note: These are just the settings that work best for my connection and playstyle. Other settings might work better for other players or for different servers depending on your ping/TPS!)*
+
+**Module Settings > Automation Config**
+![Lambda Settings 1](assets/lambda_settings_1.png)
+
+**Build > General**
+![Lambda Settings 2](assets/lambda_settings_2.png)
+
+**Build > Reach**
+![Lambda Settings 3](assets/lambda_settings_3.png)
 * Fabric API
 * Litematica
 * Baritone
+
 
