@@ -22,6 +22,7 @@ The mod uses a # prefix by default (configurable in the mod settings).
 | #stop | Completely stops the bot, halts Baritone, and resets its state. |
 | #pause | Pauses the bot in its current place (useful if you need to intervene). |
 | #resume | Resumes the bot from where it was paused. |
+| #clean | Scans the area and cleans up any accidentally misplaced carpets or blocks. |
 | #setchest <block_id> | Assigns the chest you are currently looking at to the specified block (e.g., #setchest minecraft:white_carpet). |
 | #clearchests | Clears all of your saved chest assignments. |
 
@@ -31,9 +32,11 @@ The mod uses a # prefix by default (configurable in the mod settings).
 
 For large MapArts, you can't fit all the required blocks in your inventory. The **Chest Assignment System** solves this by letting the bot restock itself!
 
+![Chest Layout](assets/chest_layout.png)
+
 **How to use it:**
-1. Place a chest and fill it with the block you need (e.g., White Carpet).
-2. Look directly at the chest.
+1. Place a chest and fill it with the block you need (e.g., White Carpet). *Tip: You can stack them in giant columns like the image above!*
+2. Look directly at the bottom chest.
 3. Type #setchest minecraft:white_carpet. 
 4. Repeat this for all the different blocks your MapArt requires.
 
@@ -44,8 +47,10 @@ When the bot is building and runs out of White Carpet, it will instantly stop, p
 
 ## 🔍 How the Bot Searches & Builds
 
+![MapArt Progress](assets/mapart_progress.png)
+
 1. **Schematic Scanning**: The bot hooks directly into Litematica to scan the loaded schematic within the boundaries you set in the mod options.
-2. **Layer-by-Layer**: It breaks down the massive build into manageable passes and layers.
+2. **Color by Color**: As seen above, it sweeps across the canvas placing blocks color by color to minimize switching inventory slots.
 3. **Inventory Matching**: It actively compares the blocks required by the schematic against the blocks currently in its inventory. 
 4. **Pathfinding execution**: Once it determines the next block it needs to place, it calculates the most efficient route and commands Baritone to walk there and execute the placement.
 
