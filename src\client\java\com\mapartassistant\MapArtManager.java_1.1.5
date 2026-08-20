@@ -1,0 +1,771 @@
+package com.mapartassistant;
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.class_1799;
+import net.minecraft.class_2960;
+import net.minecraft.class_310;
+import net.minecraft.class_7923;
+import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.lang.reflect.Method;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+
+public class MapArtManager {
+    private static boolean running = false;
+    private static boolean paused = false;
+
+    private static int startX = 0;
+    private static int startZ = 0;
+    private static int pathWidth = 5;
+    private static int mapLength = 128;
+    private static int mapWidth = 128;
+    private static boolean showHudOverlay = true;
+    private static String commandPrefix = "@mapart";
+
+    public static final List<String> ALL_SUPPORTED_BLOCKS = List.of(
+        "minecraft:white_carpet", "minecraft:orange_carpet", "minecraft:magenta_carpet", "minecraft:light_blue_carpet",
+        "minecraft:yellow_carpet", "minecraft:lime_carpet", "minecraft:pink_carpet", "minecraft:gray_carpet",
+        "minecraft:light_gray_carpet", "minecraft:cyan_carpet", "minecraft:purple_carpet", "minecraft:blue_carpet",
+        "minecraft:brown_carpet", "minecraft:green_carpet", "minecraft:red_carpet", "minecraft:black_carpet",
+        "minecraft:oak_pressure_plate", "minecraft:spruce_pressure_plate", "minecraft:birch_pressure_plate",
+        "minecraft:jungle_pressure_plate", "minecraft:acacia_pressure_plate", "minecraft:dark_oak_pressure_plate",
+        "minecraft:mangrove_pressure_plate", "minecraft:cherry_pressure_plate", "minecraft:bamboo_pressure_plate",
+        "minecraft:crimson_pressure_plate", "minecraft:warped_pressure_plate", "minecraft:stone_pressure_plate",
+        "minecraft:polished_blackstone_pressure_plate", "minecraft:heavy_weighted_pressure_plate", "minecraft:light_weighted_pressure_plate"
+    );
+
+    public static List<ChestEntry> chests = new ArrayList<>();
+    public static List<String> actionLog = new ArrayList<>();
+    
+    public static void log(String message) {
+        actionLog.add(0, new java.text.SimpleDateFormat("HH:mm:ss").format(new java.util.Date()) + " - " + message);
+        if (actionLog.size() > 100) actionLog.remove(actionLog.size() - 1);
+        class_310 client = class_310.method_1551();
+        if (client.field_1724 != null) {
+            client.field_1724.method_7353(net.minecraft.class_2561.method_43470("§e[MapArt] §f" + message), false);
+        }
+    }
+    
+    private static int currentChestIndex = 0;
+    private static int currentPathIndex = 0;
+    private static int currentPassTotalBlocksNeeded = 0;
+    private static List<int[]> currentPathWaypoints = new ArrayList<>();
+    private static boolean currentChestFrontFound = false;
+    private static long chestOpenTime = 0;
+    
+    private enum State {
+        IDLE,
+        GOING_TO_CHEST,
+        RESTOCKING,
+        PATHING_TO_WAYPOINT,
+        WAITING_FOR_BARITONE,
+        RETURNING_TO_CHEST,
+        DEPOSITING
+    }
+    
+    private static State state = State.IDLE;
+    private static long stateWaitStart = 0;
+    private static long lastBaritoneCheckTime = 0;
+    private static int restockSlotIndex = 0;
+    private static int depositSlotIndex = -1;
+
+    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+    private static final Path CONFIG_PATH = FabricLoader.getInstance().getConfigDir().resolve("mapart.json");
+
+    public static void loadConfig() {
+        File file = CONFIG_PATH.toFile();
+        if (file.exists()) {
+            try (FileReader reader = new FileReader(file)) {
+                ConfigData data = GSON.fromJson(reader, ConfigData.class);
+                if (data != null) {
+                    if (data.startX != null) startX = data.startX;
+                    if (data.startZ != null) startZ = data.startZ;
+                    if (data.pathWidth != null) pathWidth = data.pathWidth;
+                    if (data.mapLength != null) mapLength = data.mapLength;
+                    if (data.mapWidth != null) mapWidth = data.mapWidth;
+                    if (data.showHudOverlay != null) showHudOverlay = data.showHudOverlay;
+                    if (data.commandPrefix != null) commandPrefix = data.commandPrefix;
+                    if (data.chests != null) chests = data.chests;
+                }
+            } catch (Exception e) {}
+        }
+    }
+
+    public static void saveConfig() {
+        try (FileWriter writer = new FileWriter(CONFIG_PATH.toFile())) {
+            ConfigData data = new ConfigData();
+            data.startX = startX;
+            data.startZ = startZ;
+            data.pathWidth = pathWidth;
+            data.mapLength = mapLength;
+            data.mapWidth = mapWidth;
+            data.showHudOverlay = showHudOverlay;
+            data.commandPrefix = commandPrefix;
+            data.chests = chests;
+            GSON.toJson(data, writer);
+        } catch (Exception e) {}
+    }
+
+    public static void registerChest(String blockId, int x, int y, int z) {
+        chests.removeIf(c -> c.blockId.equals(blockId));
+        chests.add(new ChestEntry(blockId, x, y, z));
+        saveConfig();
+    }
+
+    public static boolean isRunning() { return running; }
+    public static boolean isPaused() { return paused; }
+
+    public static void start() {
+        running = true;
+        paused = false;
+        currentChestIndex = 0;
+        beginPass(0);
+    }
+
+    public static void stop() {
+        running = false;
+        state = State.IDLE;
+        cancelBaritone();
+    }
+
+    public static void pause() {
+        paused = true;
+        cancelBaritone();
+    }
+
+    public static void resume() {
+        paused = false;
+        // Re-issue current goal
+        if (state == State.WAITING_FOR_BARITONE) {
+            if (currentPathIndex < currentPathWaypoints.size()) {
+                int[] wp = currentPathWaypoints.get(currentPathIndex);
+                sendBaritoneGoto(wp[0], wp[1], wp[2]);
+            }
+        }
+    }
+
+    private static boolean generatePathWaypoints() {
+        currentPathWaypoints.clear();
+        
+        try {
+            net.minecraft.class_1937 schematicLevel = fi.dy.masa.litematica.world.SchematicWorldHandler.getSchematicWorld();
+            net.minecraft.class_1937 clientLevel = class_310.method_1551().field_1687;
+            
+            if (schematicLevel != null && clientLevel != null) {
+                String targetBlockId = (currentChestIndex >= 0 && currentChestIndex < chests.size()) 
+                    ? chests.get(currentChestIndex).blockId : null;
+                    
+                int searchY = class_310.method_1551().field_1724 != null ? class_310.method_1551().field_1724.method_31478() : 64;
+                List<int[]> allMissing = new ArrayList<>();
+                currentPassTotalBlocksNeeded = 0;
+                for (int yOffset = -2; yOffset <= 2; yOffset++) {
+                    int y = searchY + yOffset;
+                    for (int z = 0; z < mapLength; z++) {
+                        int absoluteZ = startZ + z;
+                        for (int x = 0; x < mapWidth; x++) {
+                            int absoluteX = startX + x;
+                            net.minecraft.class_2338 pos = new net.minecraft.class_2338(absoluteX, y, absoluteZ);
+                            net.minecraft.class_2680 schematicState = schematicLevel.method_8320(pos);
+                            
+                            if (!schematicState.method_26215()) {
+                                net.minecraft.class_2680 worldState = clientLevel.method_8320(pos);
+                                if (!schematicState.method_26204().equals(worldState.method_26204())) {
+                                    String missingId = class_7923.field_41175.method_10221(schematicState.method_26204()).toString();
+                                    if (targetBlockId == null || targetBlockId.equals(missingId)) {
+                                        currentPassTotalBlocksNeeded++;
+                                        // Cluster by pathWidth to prevent over-generating points next to each other
+                                        boolean tooClose = false;
+                                        for (int[] existing : allMissing) {
+                                            if (Math.abs(existing[0] - absoluteX) < pathWidth && Math.abs(existing[1] - absoluteZ) < pathWidth) {
+                                                tooClose = true;
+                                                break;
+                                            }
+                                        }
+                                        if (!tooClose) {
+                                            allMissing.add(new int[]{absoluteX, y, absoluteZ});
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // TSP Nearest Neighbor Sorting
+                if (!allMissing.isEmpty()) {
+                    int currentX = class_310.method_1551().field_1724 != null ? class_310.method_1551().field_1724.method_31477() : startX;
+                    int currentZ = class_310.method_1551().field_1724 != null ? class_310.method_1551().field_1724.method_31479() : startZ;
+                    
+                    while (!allMissing.isEmpty()) {
+                        int bestIndex = -1;
+                        double bestDist = Double.MAX_VALUE;
+                        for (int i = 0; i < allMissing.size(); i++) {
+                            int[] pt = allMissing.get(i);
+                            double dist = Math.pow(pt[0] - currentX, 2) + Math.pow(pt[2] - currentZ, 2);
+                            if (dist < bestDist) {
+                                bestDist = dist;
+                                bestIndex = i;
+                            }
+                        }
+                        int[] nextWp = allMissing.remove(bestIndex);
+                        currentPathWaypoints.add(nextWp);
+                        currentX = nextWp[0];
+                        currentZ = nextWp[2];
+                    }
+                    
+                    log("§aFound " + currentPathWaypoints.size() + " efficient waypoints from Litematica scan!");
+                    return true; 
+                }
+                
+                log("§eNo missing blocks found for " + targetBlockId + "! Skipping color...");
+                return false;
+            }
+        } catch (Throwable t) {
+            System.err.println("[MapArt] Litematica pathing failed or not installed: " + t.getMessage());
+        }
+        
+        // Fallback to blind snake pattern
+        log("§eFalling back to blind grid pathing...");
+        int fallbackY = class_310.method_1551().field_1724 != null ? class_310.method_1551().field_1724.method_31478() : 64;
+        for (int z = 0; z < mapLength; z += pathWidth) {
+            int absoluteZ = startZ + z;
+            currentPathWaypoints.add(new int[]{startX, fallbackY, absoluteZ});
+            currentPathWaypoints.add(new int[]{startX + mapWidth - 1, fallbackY, absoluteZ});
+            z += pathWidth;
+            if (z >= mapLength) break;
+            int absoluteZNext = startZ + z;
+            currentPathWaypoints.add(new int[]{startX + mapWidth - 1, fallbackY, absoluteZNext});
+            currentPathWaypoints.add(new int[]{startX, fallbackY, absoluteZNext});
+        }
+        return true;
+    }
+
+    private static void beginPass(int chestIndex) {
+        if (chestIndex >= chests.size()) {
+            if (chests.isEmpty() && chestIndex == 0) {
+                // If there are no chests, just run the pathing once
+                currentChestIndex = -1;
+                currentPathIndex = 0;
+                generatePathWaypoints();
+                state = State.PATHING_TO_WAYPOINT;
+                if (!currentPathWaypoints.isEmpty()) {
+                    int[] wp = currentPathWaypoints.get(0);
+                    sendBaritoneGoto(wp[0], wp[1], wp[2]);
+                    state = State.WAITING_FOR_BARITONE;
+                    log("§aStarting chestless pathing pass!");
+                } else {
+                    stop();
+                }
+                return;
+            }
+            stop();
+            log("§aPathing finished!");
+            return;
+        }
+        currentChestIndex = chestIndex;
+        currentPathIndex = 0;
+        
+        boolean hasWaypoints = generatePathWaypoints();
+        if (!hasWaypoints) {
+            beginPass(chestIndex + 1);
+            return;
+        }
+        
+        ChestEntry targetChest = chests.get(currentChestIndex);
+        
+        // Pre-check inventory
+        if (hasRequiredBlock(class_310.method_1551(), targetChest.blockId)) {
+            state = State.PATHING_TO_WAYPOINT;
+            stateWaitStart = System.currentTimeMillis();
+            log("§eAlready have " + targetChest.blockId + " in inventory, skipping restock.");
+        } else {
+            currentChestFrontFound = false;
+            sendChestGoto(targetChest.x, targetChest.y, targetChest.z);
+            state = State.GOING_TO_CHEST;
+            stateWaitStart = System.currentTimeMillis();
+            log("§ePathing to Chest " + (chestIndex + 1) + " for block " + targetChest.blockId);
+        }
+    }
+    
+    private static void sendChestGoto(int cx, int cy, int cz) {
+        class_310 client = class_310.method_1551();
+        if (client.field_1687 != null) {
+            net.minecraft.class_2338 pos = new net.minecraft.class_2338(cx, cy, cz);
+            net.minecraft.class_2680 state = client.field_1687.method_8320(pos);
+            if (!state.method_26215() && state.method_28498(net.minecraft.class_2741.field_12481)) {
+                net.minecraft.class_2350 facing = state.method_11654(net.minecraft.class_2741.field_12481);
+                int targetX = cx + facing.method_10148();
+                int targetZ = cz + facing.method_10165();
+                
+                int floorY = cy;
+                while (floorY > cy - 20 && client.field_1687.method_8320(new net.minecraft.class_2338(targetX, floorY - 1, targetZ)).method_26215()) {
+                    floorY--;
+                }
+                
+                sendBaritoneGoto(targetX, floorY, targetZ);
+                currentChestFrontFound = true;
+                return;
+            }
+        }
+        sendBaritoneGoto(cx, cy, cz);
+    }
+    
+    private static void startBuildingPass(class_310 client) {
+        state = State.PATHING_TO_WAYPOINT;
+        stateWaitStart = System.currentTimeMillis();
+    }
+
+    public static void tick(class_310 client) {
+        if (!running || paused || client.field_1724 == null) return;
+
+        switch (state) {
+            case IDLE:
+                break;
+            case GOING_TO_CHEST:
+                ChestEntry currentChest = chests.get(currentChestIndex);
+                
+                boolean isBaritoneActive = false;
+                try {
+                    Class<?> apiClass = Class.forName("baritone.api.BaritoneAPI");
+                    Object provider = apiClass.getMethod("getProvider").invoke(null);
+                    Object primaryBaritone = provider.getClass().getMethod("getPrimaryBaritone").invoke(provider);
+                    Object customGoalProcess = primaryBaritone.getClass().getMethod("getCustomGoalProcess").invoke(primaryBaritone);
+                    Object pathingControlManager = primaryBaritone.getClass().getMethod("getPathingControlManager").invoke(primaryBaritone);
+                    boolean isActive = (boolean) customGoalProcess.getClass().getMethod("isActive").invoke(customGoalProcess);
+                    boolean hasPath = (boolean) pathingControlManager.getClass().getMethod("hasPath").invoke(pathingControlManager);
+                    isBaritoneActive = isActive || hasPath;
+                } catch (Exception e) {}
+                
+                if (!currentChestFrontFound && client.field_1724.field_6012 % 10 == 0) {
+                    sendChestGoto(currentChest.x, currentChest.y, currentChest.z);
+                }
+                
+                if (!isBaritoneActive) {
+                    double dist = client.field_1724.method_5649(currentChest.x + 0.5, currentChest.y + 0.5, currentChest.z + 0.5);
+                    if (dist < 25.0) { // Within 5 blocks (Baritone goal reached)
+                        // Face chest and interact
+                        double dX = currentChest.x + 0.5 - client.field_1724.method_23317();
+                        double dY = currentChest.y + 0.5 - (client.field_1724.method_23318() + client.field_1724.method_5751());
+                        double dZ = currentChest.z + 0.5 - client.field_1724.method_23321();
+                        client.field_1724.method_36456((float) (Math.atan2(dZ, dX) * 180.0D / Math.PI) - 90.0F);
+                        client.field_1724.method_36457((float) -(Math.atan2(dY, Math.sqrt(dX * dX + dZ * dZ)) * 180.0D / Math.PI));
+                        
+                        if (System.currentTimeMillis() - stateWaitStart > 300) {
+                            net.minecraft.class_3965 hitResult = new net.minecraft.class_3965(
+                                new net.minecraft.class_243(currentChest.x + 0.5, currentChest.y + 0.5, currentChest.z + 0.5),
+                                net.minecraft.class_2350.field_11036,
+                                new net.minecraft.class_2338(currentChest.x, currentChest.y, currentChest.z),
+                                false
+                            );
+                            client.field_1761.method_2896(client.field_1724, net.minecraft.class_1268.field_5808, hitResult);
+                            
+                            state = State.RESTOCKING;
+                            restockSlotIndex = 0;
+                            stateWaitStart = System.currentTimeMillis();
+                        }
+                    } else if (System.currentTimeMillis() - stateWaitStart > 5000) {
+                        log("§cFailed to reach chest! Resuming pathing...");
+                        state = State.PATHING_TO_WAYPOINT;
+                        stateWaitStart = System.currentTimeMillis();
+                    }
+                } else {
+                    stateWaitStart = System.currentTimeMillis();
+                }
+                break;
+            case RESTOCKING:
+                if (client.field_1755 instanceof net.minecraft.class_476) {
+                    if (chestOpenTime == 0) chestOpenTime = System.currentTimeMillis();
+                    
+                    net.minecraft.class_476 screen = (net.minecraft.class_476) client.field_1755;
+                    net.minecraft.class_1703 menu = screen.method_17577();
+                    
+                    class_2960 targetRl = class_2960.method_60654(chests.get(currentChestIndex).blockId);
+                    
+                    if (System.currentTimeMillis() - chestOpenTime > 400) {
+                        int currentlyHave = getInventoryCount(client, targetRl.toString());
+                        if (currentlyHave >= currentPassTotalBlocksNeeded || !hasInventorySpace(client, targetRl.toString())) {
+                            log("§aSmart Restock complete or inventory full! Have " + currentlyHave + "/" + currentPassTotalBlocksNeeded + " needed blocks.");
+                            client.field_1724.method_7346();
+                            client.method_1507(null);
+                            state = State.PATHING_TO_WAYPOINT;
+                            stateWaitStart = System.currentTimeMillis();
+                            chestOpenTime = 0;
+                            return;
+                        }
+
+                        boolean clicked = false;
+                        int slotsChecked = 0;
+                        int totalChestSlots = menu.field_7761.size() - 36;
+                        
+                        while (slotsChecked < totalChestSlots) {
+                            if (restockSlotIndex >= totalChestSlots) restockSlotIndex = 0; // Loop around
+                            
+                            net.minecraft.class_1735 slot = menu.field_7761.get(restockSlotIndex);
+                            restockSlotIndex++;
+                            slotsChecked++;
+                            
+                            if (slot.method_7681() && class_7923.field_41178.method_10221(slot.method_7677().method_7909()).equals(targetRl)) {
+                                client.field_1761.method_2906(menu.field_7763, restockSlotIndex - 1, 0, net.minecraft.class_1713.field_7794, client.field_1724);
+                                clicked = true;
+                                break;
+                            }
+                        }
+                        
+                        if (!clicked) {
+                            log("§eRestock finished (chest empty of this block). Checking if enough blocks obtained...");
+                            client.field_1724.method_7346();
+                            client.method_1507(null);
+                            chestOpenTime = 0;
+                            
+                            if (!hasRequiredBlock(client, targetRl.toString())) {
+                                currentChest = chests.get(currentChestIndex);
+                                net.minecraft.class_2338 abovePos = new net.minecraft.class_2338(currentChest.x, currentChest.y + 1, currentChest.z);
+                                net.minecraft.class_2680 aboveState = client.field_1687.method_8320(abovePos);
+                                
+                                if (aboveState.method_26204() instanceof net.minecraft.class_2281) {
+                                    log("§eChest is empty! Moving to chest directly above it...");
+                                    currentChest.y = currentChest.y + 1;
+                                    saveConfig();
+                                    
+                                    currentChestFrontFound = false;
+                                    sendChestGoto(currentChest.x, currentChest.y, currentChest.z);
+                                    state = State.GOING_TO_CHEST;
+                                    stateWaitStart = System.currentTimeMillis();
+                                } else {
+                                    log("§cChest column is empty of " + targetRl.toString() + "! Skipping to next color.");
+                                    beginPass(currentChestIndex + 1);
+                                }
+                            } else {
+                                state = State.PATHING_TO_WAYPOINT;
+                                stateWaitStart = System.currentTimeMillis();
+                            }
+                        } else {
+                            chestOpenTime = System.currentTimeMillis() - 100; // Next tick will be 400 - 100 = 300ms wait
+                        }
+                    }
+                } else {
+                    chestOpenTime = 0;
+                    if (System.currentTimeMillis() - stateWaitStart > 4000) {
+                        log("§cFailed to open chest! Resuming pathing...");
+                        state = State.PATHING_TO_WAYPOINT;
+                        stateWaitStart = System.currentTimeMillis();
+                    }
+                }
+                break;
+            case PATHING_TO_WAYPOINT:
+                // Wait 500ms after closing chest to ensure Baritone can take over safely
+                if (System.currentTimeMillis() - stateWaitStart > 500) {
+                    if (currentPathIndex < currentPathWaypoints.size()) {
+                        int[] wp = currentPathWaypoints.get(currentPathIndex);
+                        sendBaritoneGoto(wp[0], wp[1], wp[2]); 
+                        state = State.WAITING_FOR_BARITONE;
+                        lastBaritoneCheckTime = System.currentTimeMillis();
+                        log("§aResuming pathing pass...");
+                    } else {
+                        ChestEntry targetChest = chests.get(currentChestIndex);
+                        currentChestFrontFound = false;
+                        sendChestGoto(targetChest.x, targetChest.y, targetChest.z);
+                        state = State.RETURNING_TO_CHEST;
+                        log("§aFinished color! Returning to chest to deposit leftovers...");
+                    }
+                }
+                break;
+            case WAITING_FOR_BARITONE:
+                // Check if we reached the current waypoint
+                int[] wp = currentPathWaypoints.get(currentPathIndex);
+                double distToWp = client.field_1724.method_5649(wp[0], client.field_1724.method_23318(), wp[2]);
+                
+                // If we ran out of the required block, we need to restock mid-pass
+                if (client.field_1724.field_6012 % 20 == 0 && currentChestIndex != -1) { // Check every 20 ticks reliably
+                    if ((state == State.PATHING_TO_WAYPOINT || state == State.WAITING_FOR_BARITONE) && !hasRequiredBlock(client, chests.get(currentChestIndex).blockId)) {
+                        ChestEntry targetChest = chests.get(currentChestIndex);
+                        currentChestFrontFound = false;
+                        sendChestGoto(targetChest.x, targetChest.y, targetChest.z);
+                        state = State.GOING_TO_CHEST;
+                        log("§cOut of blocks! Pathing to chest...");
+                        return; // Pause pathing
+                    }
+                }
+
+                if (distToWp < 9.0) { // Arrived at waypoint (radius 3 blocks)
+                    currentPathIndex++;
+                    if (currentPathIndex < currentPathWaypoints.size()) {
+                        int[] nextWp = currentPathWaypoints.get(currentPathIndex);
+                        sendBaritoneGoto(nextWp[0], nextWp[1], nextWp[2]);
+                    } else {
+                        // Finished pass! Time to deposit leftovers.
+                        ChestEntry targetChest = chests.get(currentChestIndex);
+                        currentChestFrontFound = false;
+                        sendChestGoto(targetChest.x, targetChest.y, targetChest.z);
+                        state = State.RETURNING_TO_CHEST;
+                        log("§aFinished color! Returning to chest to deposit leftovers...");
+                    }
+                } else {
+                    if (System.currentTimeMillis() - lastBaritoneCheckTime > 1500) {
+                        lastBaritoneCheckTime = System.currentTimeMillis();
+                        try {
+                            Class<?> apiClass = Class.forName("baritone.api.BaritoneAPI");
+                            Object provider = apiClass.getMethod("getProvider").invoke(null);
+                            Object primaryBaritone = provider.getClass().getMethod("getPrimaryBaritone").invoke(provider);
+                            Object customGoalProcess = primaryBaritone.getClass().getMethod("getCustomGoalProcess").invoke(primaryBaritone);
+                            Object pathingControlManager = primaryBaritone.getClass().getMethod("getPathingControlManager").invoke(primaryBaritone);
+                            
+                            boolean isActive = (boolean) customGoalProcess.getClass().getMethod("isActive").invoke(customGoalProcess);
+                            boolean hasPath = (boolean) pathingControlManager.getClass().getMethod("hasPath").invoke(pathingControlManager);
+                            
+                            // If we are waiting for Baritone but Baritone is completely idle
+                            if (!isActive && !hasPath) {
+                                log("§eBaritone got stuck or finished early. Skipping to next waypoint...");
+                                currentPathIndex++;
+                                if (currentPathIndex < currentPathWaypoints.size()) {
+                                    int[] nextWp = currentPathWaypoints.get(currentPathIndex);
+                                    sendBaritoneGoto(nextWp[0], nextWp[1], nextWp[2]);
+                                } else {
+                                    ChestEntry targetChest = chests.get(currentChestIndex);
+                                    currentChestFrontFound = false;
+                                    sendChestGoto(targetChest.x, targetChest.y, targetChest.z);
+                                    state = State.RETURNING_TO_CHEST;
+                                    log("§aFinished color! Returning to chest to deposit leftovers...");
+                                }
+                            }
+                        } catch (Exception e) {}
+                    }
+                }
+                break;
+            case RETURNING_TO_CHEST:
+                ChestEntry returnChest = chests.get(currentChestIndex);
+                
+                boolean isBaritoneActiveRet = false;
+                try {
+                    Class<?> apiClass = Class.forName("baritone.api.BaritoneAPI");
+                    Object provider = apiClass.getMethod("getProvider").invoke(null);
+                    Object primaryBaritone = provider.getClass().getMethod("getPrimaryBaritone").invoke(provider);
+                    Object customGoalProcess = primaryBaritone.getClass().getMethod("getCustomGoalProcess").invoke(primaryBaritone);
+                    Object pathingControlManager = primaryBaritone.getClass().getMethod("getPathingControlManager").invoke(primaryBaritone);
+                    boolean isActive = (boolean) customGoalProcess.getClass().getMethod("isActive").invoke(customGoalProcess);
+                    boolean hasPath = (boolean) pathingControlManager.getClass().getMethod("hasPath").invoke(pathingControlManager);
+                    isBaritoneActiveRet = isActive || hasPath;
+                } catch (Exception e) {}
+                
+                if (!currentChestFrontFound && client.field_1724.field_6012 % 10 == 0) {
+                    sendChestGoto(returnChest.x, returnChest.y, returnChest.z);
+                }
+                
+                if (!isBaritoneActiveRet) {
+                    double dist = client.field_1724.method_5649(returnChest.x + 0.5, returnChest.y + 0.5, returnChest.z + 0.5);
+                    if (dist < 25.0) { // Within 5 blocks
+                        // Face chest and interact
+                        double dX = returnChest.x + 0.5 - client.field_1724.method_23317();
+                        double dY = returnChest.y + 0.5 - (client.field_1724.method_23318() + client.field_1724.method_5751());
+                        double dZ = returnChest.z + 0.5 - client.field_1724.method_23321();
+                        client.field_1724.method_36456((float) (Math.atan2(dZ, dX) * 180.0D / Math.PI) - 90.0F);
+                        client.field_1724.method_36457((float) -(Math.atan2(dY, Math.sqrt(dX * dX + dZ * dZ)) * 180.0D / Math.PI));
+                        
+                        if (System.currentTimeMillis() - stateWaitStart > 300) {
+                            net.minecraft.class_3965 hitResult = new net.minecraft.class_3965(
+                                new net.minecraft.class_243(returnChest.x + 0.5, returnChest.y + 0.5, returnChest.z + 0.5),
+                                net.minecraft.class_2350.field_11036,
+                                new net.minecraft.class_2338(returnChest.x, returnChest.y, returnChest.z),
+                                false
+                            );
+                            client.field_1761.method_2896(client.field_1724, net.minecraft.class_1268.field_5808, hitResult);
+                            
+                            state = State.DEPOSITING;
+                            depositSlotIndex = -1;
+                            stateWaitStart = System.currentTimeMillis();
+                        }
+                    } else if (System.currentTimeMillis() - stateWaitStart > 5000) {
+                        log("§cFailed to reach chest! Moving on...");
+                        beginPass(currentChestIndex + 1);
+                    }
+                } else {
+                    stateWaitStart = System.currentTimeMillis();
+                }
+                break;
+            case DEPOSITING:
+                if (client.field_1755 instanceof net.minecraft.class_476) {
+                    if (chestOpenTime == 0) chestOpenTime = System.currentTimeMillis();
+                    
+                    net.minecraft.class_476 screen = (net.minecraft.class_476) client.field_1755;
+                    net.minecraft.class_1703 menu = screen.method_17577();
+                    
+                    if (System.currentTimeMillis() - chestOpenTime > 400) {
+                        if (!hasRequiredBlock(client, chests.get(currentChestIndex).blockId)) {
+                            // Empty of this block! Move to next pass!
+                            client.field_1724.method_7346();
+                            client.method_1507(null);
+                            chestOpenTime = 0;
+                            beginPass(currentChestIndex + 1);
+                            return;
+                        }
+                        
+                        boolean clicked = false;
+                        class_2960 targetRl = class_2960.method_60654(chests.get(currentChestIndex).blockId);
+                        int totalChestSlots = menu.field_7761.size() - 36;
+                        
+                        // We need to click items from our inventory INTO the chest
+                        for (int i = totalChestSlots; i < menu.field_7761.size(); i++) {
+                            net.minecraft.class_1735 slot = menu.field_7761.get(i);
+                            if (slot.method_7681() && class_7923.field_41178.method_10221(slot.method_7677().method_7909()).equals(targetRl)) {
+                                client.field_1761.method_2906(menu.field_7763, i, 0, net.minecraft.class_1713.field_7794, client.field_1724);
+                                clicked = true;
+                                break;
+                            }
+                        }
+                        
+                        if (!clicked) {
+                            client.field_1724.method_7346();
+                            client.method_1507(null);
+                            chestOpenTime = 0;
+                            
+                            int remainingToDeposit = getInventoryCount(client, targetRl.toString());
+                            if (remainingToDeposit > 0) {
+                                returnChest = chests.get(currentChestIndex);
+                                net.minecraft.class_2338 abovePos = new net.minecraft.class_2338(returnChest.x, returnChest.y + 1, returnChest.z);
+                                net.minecraft.class_2680 aboveState = client.field_1687.method_8320(abovePos);
+                                
+                                if (aboveState.method_26204() instanceof net.minecraft.class_2281) {
+                                    log("§eChest full! Depositing into chest above...");
+                                    returnChest.y = returnChest.y + 1;
+                                    saveConfig();
+                                    
+                                    currentChestFrontFound = false;
+                                    sendChestGoto(returnChest.x, returnChest.y, returnChest.z);
+                                    state = State.RETURNING_TO_CHEST;
+                                    stateWaitStart = System.currentTimeMillis();
+                                    return;
+                                } else {
+                                    log("§cChest column full! Trashing " + remainingToDeposit + " leftover blocks...");
+                                }
+                            }
+                            
+                            beginPass(currentChestIndex + 1);
+                        } else {
+                            chestOpenTime = System.currentTimeMillis() - 100; // Next tick will be 300ms wait
+                        }
+                    }
+                } else {
+                    chestOpenTime = 0;
+                    if (System.currentTimeMillis() - stateWaitStart > 4000) {
+                        log("§cFailed to open chest to deposit! Moving on...");
+                        beginPass(currentChestIndex + 1);
+                    }
+                }
+                break;
+        }
+    }
+    
+    public static int getInventoryCount(class_310 client, String blockIdStr) {
+        int count = 0;
+        class_2960 targetRl = class_2960.method_60654(blockIdStr);
+        for (class_1799 stack : client.field_1724.method_31548().field_7547) {
+            if (class_7923.field_41178.method_10221(stack.method_7909()).equals(targetRl)) {
+                count += stack.method_7947();
+            }
+        }
+        return count;
+    }
+
+    private static boolean hasInventorySpace(class_310 client, String blockIdStr) {
+        class_2960 targetRl = class_2960.method_60654(blockIdStr);
+        for (class_1799 stack : client.field_1724.method_31548().field_7547) {
+            if (stack.method_7960()) return true;
+            if (class_7923.field_41178.method_10221(stack.method_7909()).equals(targetRl) && stack.method_7947() < stack.method_7914()) return true;
+        }
+        return false;
+    }
+
+    private static boolean hasChestSpace(net.minecraft.class_1703 menu, String blockIdStr) {
+        class_2960 targetRl = class_2960.method_60654(blockIdStr);
+        for (int i = 0; i < menu.field_7761.size() - 36; i++) {
+            class_1799 stack = menu.field_7761.get(i).method_7677();
+            if (stack.method_7960()) return true;
+            if (class_7923.field_41178.method_10221(stack.method_7909()).equals(targetRl) && stack.method_7947() < stack.method_7914()) return true;
+        }
+        return false;
+    }
+
+    private static boolean hasRequiredBlock(class_310 client, String blockIdStr) {
+        return getInventoryCount(client, blockIdStr) > 0;
+    }
+
+    private static void sendBaritoneGoto(int x, int y, int z) {
+        try {
+            Class<?> apiClass = Class.forName("baritone.api.BaritoneAPI");
+            Object provider = apiClass.getMethod("getProvider").invoke(null);
+            Object primaryBaritone = provider.getClass().getMethod("getPrimaryBaritone").invoke(provider);
+            Object customGoalProcess = primaryBaritone.getClass().getMethod("getCustomGoalProcess").invoke(primaryBaritone);
+            
+            Class<?> goalBlockClass = Class.forName("baritone.api.pathing.goals.GoalBlock");
+            Object goalBlock = goalBlockClass.getConstructor(int.class, int.class, int.class).newInstance(x, y, z);
+            
+            customGoalProcess.getClass().getMethod("setGoal", Class.forName("baritone.api.pathing.goals.Goal")).invoke(customGoalProcess, goalBlock);
+            customGoalProcess.getClass().getMethod("path").invoke(customGoalProcess);
+        } catch (Exception e) {
+            System.err.println("[MapArt] Baritone API failed: " + e.getMessage());
+        }
+    }
+
+    private static void cancelBaritone() {
+        try {
+            Class<?> apiClass = Class.forName("baritone.api.BaritoneAPI");
+            Object provider = apiClass.getMethod("getProvider").invoke(null);
+            Object primaryBaritone = provider.getClass().getMethod("getPrimaryBaritone").invoke(provider);
+            
+            try {
+                Object pathingBehavior = primaryBaritone.getClass().getMethod("getPathingBehavior").invoke(primaryBaritone);
+                pathingBehavior.getClass().getMethod("cancelEverything").invoke(pathingBehavior);
+            } catch (Exception e) {}
+            
+            try {
+                Object customGoalProcess = primaryBaritone.getClass().getMethod("getCustomGoalProcess").invoke(primaryBaritone);
+                customGoalProcess.getClass().getMethod("setGoal", Class.forName("baritone.api.pathing.goals.Goal")).invoke(customGoalProcess, new Object[]{null});
+            } catch (Exception e) {}
+            
+            try {
+                Object commandManager = primaryBaritone.getClass().getMethod("getCommandManager").invoke(primaryBaritone);
+                commandManager.getClass().getMethod("execute", String.class).invoke(commandManager, "stop");
+            } catch (Exception e) {}
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static class ChestEntry {
+        public String blockId;
+        public int x, y, z;
+        public ChestEntry(String blockId, int x, int y, int z) {
+            this.blockId = blockId;
+            this.x = x; this.y = y; this.z = z;
+        }
+    }
+
+    private static class ConfigData {
+        Integer startX, startZ, pathWidth, mapLength, mapWidth;
+        Boolean showHudOverlay;
+        String commandPrefix;
+        List<ChestEntry> chests;
+    }
+
+    // Getters / Setters for GUI
+    public static int getStartX() { return startX; }
+    public static void setStartX(int x) { startX = x; saveConfig(); }
+    public static int getStartZ() { return startZ; }
+    public static void setStartZ(int z) { startZ = z; saveConfig(); }
+    public static int getPathWidth() { return pathWidth; }
+    public static void setPathWidth(int w) { pathWidth = w; saveConfig(); }
+    public static int getMapLength() { return mapLength; }
+    public static void setMapLength(int l) { mapLength = l; saveConfig(); }
+    public static int getMapWidth() { return mapWidth; }
+    public static void setMapWidth(int w) { mapWidth = w; saveConfig(); }
+    public static String getCommandPrefix() { return commandPrefix; }
+    public static void setCommandPrefix(String p) { commandPrefix = p; saveConfig(); }
+    public static boolean isShowHudOverlay() { return showHudOverlay; }
+    public static void setShowHudOverlay(boolean b) { showHudOverlay = b; saveConfig(); }
+    public static int getCurrentChestIndex() { return currentChestIndex; }
+}

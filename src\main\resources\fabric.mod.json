@@ -1,0 +1,24 @@
+{
+	"schemaVersion": 1,
+	"id": "mapartassistant",
+	"version": "1.4.0",
+	"name": "Map Art Assistant",
+	"description": "Automates pathing for map art printing on anarchy servers.",
+	"authors": [
+		"Antigravity"
+	],
+	"contact": {},
+	"license": "MIT",
+	"environment": "client",
+	"entrypoints": {
+		"client": [
+			"com.mapartassistant.MapArtModClient"
+		]
+	},
+	"depends": {
+		"fabricloader": ">=0.17.2",
+		"minecraft": "~1.21.4",
+		"java": ">=21",
+		"fabric-api": "*"
+	}
+}
