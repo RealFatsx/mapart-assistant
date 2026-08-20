@@ -10,7 +10,7 @@ A fully automated, client-side Fabric mod designed to build massive MapArts in M
 If you're building on the oldest anarchy server in Minecraft, come join the official Mapartists of 2b2t Discord community here: [https://discord.com/invite/r7Tuerq](https://discord.com/invite/r7Tuerq)
 
 **Recommended MapArt Platform Schematic:**
-Need a flat, solid foundation to build your art on? You can download my recommended platform schematic here: [Download Schematic](https://discordapp.com/channels/349201680023289867/1418153264351805553)
+Here is my reconmended mapart platform. It is the one mentioned in this video: [Download Schematic](https://discordapp.com/channels/349201680023289867/1418153264351805553)
 
 ---
 
